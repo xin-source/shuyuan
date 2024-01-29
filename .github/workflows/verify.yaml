@@ -1,0 +1,42 @@
+name: verify
+
+on:
+  schedule:
+      - cron: "0 1 * * *"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v4
+      - name: wgcf register
+        run: |
+          mkdir -p /tmp/wgcf
+          cd /tmp/wgcf
+          docker run --rm -id --name wgcf -v /tmp/wgcf:/wgcf -w /wgcf -p 1080:1080 ubuntu:latest
+          docker exec -i wgcf apt-get update
+          docker exec -i wgcf apt-get install -y wget ca-certificates
+          docker exec -i wgcf wget -O wgcf https://github.com/ViRb3/wgcf/releases/download/v2.2.21/wgcf_2.2.21_linux_amd64
+          docker exec -i wgcf chmod +x wgcf
+          docker exec -i wgcf ./wgcf register --accept-tos
+          docker exec -i wgcf ./wgcf generate
+          docker exec -i wgcf wget -O wireproxy_linux_amd64.tar.gz https://github.com/pufferffish/wireproxy/releases/download/v1.0.6/wireproxy_linux_amd64.tar.gz
+          docker exec -i wgcf tar xf wireproxy_linux_amd64.tar.gz
+          docker exec -i wgcf chmod +x wireproxy
+          docker exec -i wgcf bash -c 'echo "[Socks5]" >> wgcf-profile.conf'
+          docker exec -i wgcf bash -c 'echo "BindAddress = 0.0.0.0:1080" >> wgcf-profile.conf'
+          docker exec -i wgcf sed -E -i 's@^[^\n]+/128@@' wgcf-profile.conf
+          docker exec -i wgcf ./wireproxy -c wgcf-profile.conf -d
+      - name: Run a multi-line script
+        run: |
+          go run .
+
+          git config user.name dependabot[bot]
+          git config user.email 49699333+dependabot[bot]@users.noreply.github.com
+          git add -f good.json
+          git commit -m 'update' || exit 0
+          git branch -M result
+          git push -f -u origin result
