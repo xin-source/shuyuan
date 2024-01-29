@@ -15,6 +15,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v4
+      - name: Hectorqin
+        run: |
+          # TODO hectorqin/reader use warp
+          docker run --rm -d --name reader -p 127.0.0.1:8080:8080 hectorqin/reader
+          until $(curl --output /dev/null --silent --head --fail http://127.0.0.1:8080); do
+              printf '.'
+              sleep 3s
+          done
+          # # 添加订阅
+          # curl -f -X POST 'http://127.0.0.1:8080/reader3/file/save' -H 'Content-type: application/json' -d '{"path":"remoteBookSourceSub.json","content":"[{\"name\":\"book\",\"link\":\"https://raw.githubusercontent.com/shidahuilang/shuyuan/shuyuan/book.json\",\"lastSyncTime\":null}]","home":"__HOME__"}' -i
+          # 同步，相当于导入
+          curl -X POST 'http://127.0.0.1:8080/reader3/saveFromRemoteSource' -H 'Content-type: application/json' -d '{"url":"https://raw.githubusercontent.com/shidahuilang/shuyuan/shuyuan/book.json"}' -i
       - name: wgcf register
         run: |
           mkdir -p /tmp/wgcf

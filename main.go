@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -15,12 +16,19 @@ import (
 )
 
 const (
-	Timeout = time.Second * 10
-	Threads = 32
+	// warp 请求 source url 的超时
+	ConnectTimeout = time.Second * 10
+	// 用 hectorqin/reader 验证的超时
+	VerifyTimeout = time.Second * 60
+	Threads       = 32
+	Proxy         = "127.0.0.1:1080"
+	Hectorqin     = "http://127.0.0.1:8080"
+	SearchBook    = "斗罗大陆"
+	Source        = "https://raw.githubusercontent.com/shidahuilang/shuyuan/shuyuan/book.json"
 )
 
 func main() {
-	d, err := proxy.SOCKS5("tcp", "127.0.0.1:1080", nil, nil)
+	d, err := proxy.SOCKS5("tcp", Proxy, nil, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -44,7 +52,7 @@ func main() {
 	}
 
 	{
-		res, err := http.Get("https://raw.githubusercontent.com/shidahuilang/shuyuan/shuyuan/book.json")
+		res, err := http.Get(Source)
 		if err != nil {
 			panic(err)
 		}
@@ -78,6 +86,7 @@ func main() {
 		var outputs = []map[string]interface{}{}
 		for result := range resultChannel {
 			outputs = append(outputs, result)
+			log.Println("verified", readString(result, "bookSourceName"), readString(result, "bookSourceUrl"))
 		}
 
 		if len(outputs) > 0 {
@@ -95,9 +104,43 @@ func main() {
 	}
 }
 
+func verify(u string) bool {
+	m := map[string]string{
+		"key":           SearchBook,
+		"bookSourceUrl": u,
+	}
+	b, _ := json.Marshal(m)
+
+	c := &http.Client{
+		Timeout: VerifyTimeout,
+	}
+
+	res, err := c.Post(fmt.Sprintf("%s/reader3/searchBook?v=%d", Hectorqin, time.Now().UnixMilli()),
+		"application/json", bytes.NewReader(b))
+	if err != nil {
+		return false
+	}
+
+	defer res.Body.Close()
+	r, _ := io.ReadAll(res.Body)
+
+	var result struct {
+		IsSuccess bool `json:"isSuccess"`
+	}
+	err = json.Unmarshal(r, &result)
+	if err != nil {
+		return false
+	}
+
+	return result.IsSuccess
+}
+
 func produce(sources []map[string]interface{}, ch chan<- map[string]interface{}) {
 
-	for _, source := range sources {
+	for i, source := range sources {
+		if i%100 == 0 {
+			log.Println("current", i, "/", len(sources))
+		}
 		bookSourceUrl := readString(source, "bookSourceUrl")
 		if bookSourceUrl == "" {
 			continue
@@ -133,8 +176,8 @@ func produce(sources []map[string]interface{}, ch chan<- map[string]interface{})
 
 func consume(tr http.RoundTripper, in <-chan map[string]interface{}, out chan<- map[string]interface{}) {
 	for task := range in {
-		log.Println(readString(task, "bookSourceName"), readString(task, "bookSourceUrl"))
-		if is2xx(tr, readString(task, "bookSourceUrl")) {
+		bookSourceUrl := readString(task, "bookSourceUrl")
+		if is2xx(tr, bookSourceUrl) && verify(bookSourceUrl) {
 			out <- task
 		}
 	}
@@ -155,7 +198,7 @@ func readString(source map[string]interface{}, key string) string {
 func httpGet(tr http.RoundTripper, u string) (*http.Response, error) {
 	c := &http.Client{
 		Transport: tr,
-		Timeout:   Timeout,
+		Timeout:   ConnectTimeout,
 	}
 
 	req, err := http.NewRequest(http.MethodGet, u, nil)
