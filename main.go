@@ -118,11 +118,13 @@ func verify(u string) bool {
 	res, err := c.Post(fmt.Sprintf("%s/reader3/searchBook?v=%d", Hectorqin, time.Now().UnixMilli()),
 		"application/json", bytes.NewReader(b))
 	if err != nil {
+		log.Println("verify", "post", err)
 		return false
 	}
 
 	defer res.Body.Close()
 	r, _ := io.ReadAll(res.Body)
+	log.Println("verify", string(b), string(r))
 
 	var result struct {
 		IsSuccess bool `json:"isSuccess"`
