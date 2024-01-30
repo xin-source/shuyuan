@@ -163,6 +163,7 @@ func main() {
 
 func step1(sources []map[string]interface{}, step2in chan<- map[string]interface{}) {
 
+	m := map[string]byte{}
 	for i, source := range sources {
 		if i%100 == 0 {
 			log.Println("current", i, "/", len(sources))
@@ -171,6 +172,12 @@ func step1(sources []map[string]interface{}, step2in chan<- map[string]interface
 		if bookSourceUrl == "" {
 			continue
 		}
+		_, ok := m[bookSourceUrl]
+		if ok {
+			continue
+		}
+		m[bookSourceUrl] = 1
+
 		bookSourceName := readString(source, "bookSourceName")
 
 		if shouldExclude(bookSourceName) {
