@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -11,24 +12,59 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
-const (
+var config struct {
+	SourceURL               string   `yaml:"source_url"`
+	UserAgent               string   `yaml:"user_agent"`
+	Excludes                []string `yaml:"excludes"`
+	ExcludesInsensitiveCase []string `yaml:"excludes_insensitive_case"`
+	ConnectThreads          int      `yaml:"connect_treads"`
 	// warp 请求 source url 的超时
-	ConnectTimeout = time.Second * 10
+	ConnectTimeout int `yaml:"connect_timeout"`
+	VerifyThreads  int `yaml:"verify_threads"`
 	// 用 hectorqin/reader 验证的超时
-	VerifyTimeout  = time.Second * 60
-	ConnectThreads = 32
-	VerifyThreads  = 8
-	Hectorqin      = "http://127.0.0.1:8080"
-	SearchBook     = "斗罗大陆"
-	SourceURL      = "https://raw.githubusercontent.com/shidahuilang/shuyuan/shuyuan/book.json"
-)
+	VerifyTimeout int `yaml:"verify_timeout"`
+	VerifyBooks   []struct {
+		Name   string `yaml:"name"`
+		Author string `yaml:"author"`
+	} `yaml:"verify_books"`
+	VerifyAPI      string `yaml:"verify_api"`
+	ConnectViaWarp bool   `yaml:"connect_via_warp"`
+}
 
 func main() {
-	// verify whether warp is on
+	configFile := flag.String("c", "config.yaml", "")
+	flag.Parse()
+
 	{
-		res, err := httpGet("https://cloudflare.com/cdn-cgi/trace", ConnectTimeout)
+		b, err := os.ReadFile(*configFile)
+		if err != nil {
+			panic(err)
+		}
+
+		err = yaml.Unmarshal(b, &config)
+		if err != nil {
+			panic(err)
+		}
+
+		b, _ = yaml.Marshal(config)
+
+		if config.SourceURL == "" ||
+			config.ConnectThreads <= 0 || config.ConnectTimeout <= 0 ||
+			config.VerifyThreads <= 0 || config.VerifyTimeout <= 0 ||
+			len(config.VerifyBooks) == 0 || config.VerifyBooks[0].Name == "" || config.VerifyBooks[0].Author == "" ||
+			config.VerifyAPI == "" {
+			panic(string(b))
+		}
+
+		log.Println("config", "\n"+string(b))
+	}
+
+	if config.ConnectViaWarp {
+		res, err := httpGet("https://cloudflare.com/cdn-cgi/trace", time.Second*time.Duration(config.ConnectTimeout))
 		if err != nil {
 			panic(err)
 		}
@@ -42,10 +78,10 @@ func main() {
 
 	{
 		m := map[string]string{
-			"url": SourceURL,
+			"url": config.SourceURL,
 		}
 		b, _ := json.Marshal(m)
-		res, err := httpPostJson(fmt.Sprintf("%s/reader3/saveFromRemoteSource?v=%d", Hectorqin, time.Now().UnixMilli()), string(b), time.Minute*10)
+		res, err := httpPostJson(fmt.Sprintf("%s/reader3/saveFromRemoteSource?v=%d", config.VerifyAPI, time.Now().UnixMilli()), string(b), time.Minute*10)
 		if err != nil {
 			panic(err)
 		}
@@ -60,7 +96,7 @@ func main() {
 	}
 
 	{
-		res, err := http.Get(SourceURL)
+		res, err := http.Get(config.SourceURL)
 		if err != nil {
 			panic(err)
 		}
@@ -79,7 +115,7 @@ func main() {
 		go step1(sources, step2in)
 
 		var wgStep2 sync.WaitGroup
-		for i := 0; i < ConnectThreads; i++ {
+		for i := 0; i < config.ConnectThreads; i++ {
 			wgStep2.Add(1)
 			go func() {
 				defer wgStep2.Done()
@@ -92,7 +128,7 @@ func main() {
 		}()
 
 		var wgStep3 sync.WaitGroup
-		for i := 0; i < VerifyThreads; i++ {
+		for i := 0; i < config.VerifyThreads; i++ {
 			wgStep3.Add(1)
 			go func() {
 				defer wgStep3.Done()
@@ -125,34 +161,6 @@ func main() {
 	}
 }
 
-func verify(u string) bool {
-	m := map[string]string{
-		"key":           SearchBook,
-		"bookSourceUrl": u,
-	}
-	b, _ := json.Marshal(m)
-
-	res, err := httpPostJson(fmt.Sprintf("%s/reader3/searchBook?v=%d", Hectorqin, time.Now().UnixMilli()), string(b), VerifyTimeout)
-	if err != nil {
-		log.Println("verify", "post", err)
-		return false
-	}
-
-	defer res.Body.Close()
-	r, _ := io.ReadAll(res.Body)
-	log.Println("verify", string(b), string(r))
-
-	var result struct {
-		IsSuccess bool `json:"isSuccess"`
-	}
-	err = json.Unmarshal(r, &result)
-	if err != nil {
-		return false
-	}
-
-	return result.IsSuccess
-}
-
 func step1(sources []map[string]interface{}, step2in chan<- map[string]interface{}) {
 
 	for i, source := range sources {
@@ -165,23 +173,7 @@ func step1(sources []map[string]interface{}, step2in chan<- map[string]interface
 		}
 		bookSourceName := readString(source, "bookSourceName")
 
-		if strings.Contains(bookSourceName, "禁") ||
-			strings.Contains(bookSourceName, "漫") ||
-			strings.Contains(bookSourceName, "成人") ||
-			strings.Contains(bookSourceName, "BL") ||
-			strings.Contains(bookSourceName, "腐") ||
-			strings.Contains(bookSourceName, "甜") ||
-			strings.Contains(bookSourceName, "🎧") ||
-			strings.Contains(bookSourceName, "音乐") ||
-			strings.Contains(bookSourceName, "广播") ||
-			strings.Contains(bookSourceName, "FM") ||
-			strings.Contains(bookSourceName, "耽") ||
-			strings.Contains(bookSourceName, "同人") ||
-			strings.Contains(bookSourceName, "听") ||
-			strings.Contains(bookSourceName, "草榴") ||
-			strings.Contains(bookSourceName, "图片") ||
-			strings.Contains(strings.ToUpper(bookSourceName), "R18") ||
-			strings.Contains(bookSourceName, "🔞") {
+		if shouldExclude(bookSourceName) {
 			continue
 		}
 
@@ -232,14 +224,9 @@ func httpGet(u string, timeout time.Duration) (*http.Response, error) {
 		return nil, err
 	}
 
-	req.Header.Set("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.58")
+	req.Header.Set("user-agent", config.UserAgent)
 
 	return c.Do(req)
-}
-
-func is2xx(u string) bool {
-	res, err := httpGet(u, ConnectTimeout)
-	return err == nil && res.StatusCode >= 200 && res.StatusCode < 300
 }
 
 func httpPostJson(u string, body string, timeout time.Duration) (*http.Response, error) {
@@ -253,7 +240,101 @@ func httpPostJson(u string, body string, timeout time.Duration) (*http.Response,
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.58")
+	req.Header.Set("user-agent", config.UserAgent)
 
 	return c.Do(req)
+}
+
+func shouldExclude(name string) bool {
+	if strings.TrimSpace(name) == "" {
+		return true
+	}
+
+	for _, e := range config.Excludes {
+		if strings.Contains(name, e) {
+			return true
+		}
+	}
+
+	for _, e := range config.ExcludesInsensitiveCase {
+		if strings.Contains(strings.ToLower(name), strings.ToLower(e)) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func is2xx(u string) bool {
+	res, err := httpGet(u, time.Second*time.Duration(config.ConnectTimeout))
+	return err == nil && res.StatusCode >= 200 && res.StatusCode < 300
+}
+
+func verify(u string) bool {
+	for i := range config.VerifyBooks {
+		if verifySingle(u, config.VerifyBooks[i].Name, config.VerifyBooks[i].Author) {
+			return true
+		}
+	}
+	return false
+}
+
+func truncate(b []byte) []byte {
+	max := 64
+	if len(b) > max {
+		return b[:max]
+	} else {
+		return b
+	}
+}
+
+func verifySingle(u, bookName, bookAuthor string) bool {
+	m := map[string]string{
+		"key":           bookName,
+		"bookSourceUrl": u,
+	}
+	b, _ := json.Marshal(m)
+
+	res, err := httpPostJson(fmt.Sprintf("%s/reader3/searchBook?v=%d", config.VerifyAPI, time.Now().UnixMilli()), string(b), time.Second*time.Duration(config.VerifyTimeout))
+	if err != nil {
+		log.Println("verify", "post", err)
+		return false
+	}
+
+	defer res.Body.Close()
+	r, _ := io.ReadAll(res.Body)
+	log.Println("verify", string(b), string(truncate(r)))
+
+	var result struct {
+		IsSuccess bool                     `json:"isSuccess"`
+		Data      []map[string]interface{} `json:"data"`
+	}
+	err = json.Unmarshal(r, &result)
+	if err != nil {
+		return false
+	}
+
+	if !result.IsSuccess {
+		return false
+	}
+
+	found := false
+	for _, data := range result.Data {
+		author, ok := data["author"]
+		if !ok {
+			continue
+		}
+
+		if author == nil {
+			continue
+		}
+
+		authorStr, _ := author.(string)
+		if authorStr == bookAuthor {
+			found = true
+			break
+		}
+	}
+
+	return found
 }

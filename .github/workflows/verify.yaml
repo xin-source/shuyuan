@@ -40,7 +40,6 @@ jobs:
       - name: commit
         run: |
           sudo chown `id -u`:`id -g` good.json
-          go run .
 
           git config user.name dependabot[bot]
           git config user.email 49699333+dependabot[bot]@users.noreply.github.com
