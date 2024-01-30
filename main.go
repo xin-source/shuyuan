@@ -11,35 +11,24 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/net/proxy"
 )
 
 const (
 	// warp 请求 source url 的超时
 	ConnectTimeout = time.Second * 10
 	// 用 hectorqin/reader 验证的超时
-	VerifyTimeout = time.Second * 60
-	Threads       = 32
-	Proxy         = "127.0.0.1:1080"
-	Hectorqin     = "http://127.0.0.1:8080"
-	SearchBook    = "斗罗大陆"
-	Source        = "https://raw.githubusercontent.com/shidahuilang/shuyuan/shuyuan/book.json"
+	VerifyTimeout  = time.Second * 60
+	ConnectThreads = 32
+	VerifyThreads  = 8
+	Hectorqin      = "http://127.0.0.1:8080"
+	SearchBook     = "斗罗大陆"
+	SourceURL      = "https://raw.githubusercontent.com/shidahuilang/shuyuan/shuyuan/book.json"
 )
 
 func main() {
-	d, err := proxy.SOCKS5("tcp", Proxy, nil, nil)
-	if err != nil {
-		panic(err)
-	}
-
-	tr := &http.Transport{
-		DialContext: d.(proxy.ContextDialer).DialContext,
-	}
-
 	// verify whether warp is on
 	{
-		res, err := httpGet(tr, "https://cloudflare.com/cdn-cgi/trace")
+		res, err := httpGet("https://cloudflare.com/cdn-cgi/trace", ConnectTimeout)
 		if err != nil {
 			panic(err)
 		}
@@ -52,7 +41,26 @@ func main() {
 	}
 
 	{
-		res, err := http.Get(Source)
+		m := map[string]string{
+			"url": SourceURL,
+		}
+		b, _ := json.Marshal(m)
+		res, err := httpPostJson(fmt.Sprintf("%s/reader3/saveFromRemoteSource?v=%d", Hectorqin, time.Now().UnixMilli()), string(b), time.Minute*10)
+		if err != nil {
+			panic(err)
+		}
+
+		defer res.Body.Close()
+		b, _ = io.ReadAll(res.Body)
+		if res.StatusCode < 200 || res.StatusCode >= 300 {
+			panic(string(b))
+		} else {
+			log.Println("saveFromRemoteSource", string(b))
+		}
+	}
+
+	{
+		res, err := http.Get(SourceURL)
 		if err != nil {
 			panic(err)
 		}
@@ -64,27 +72,40 @@ func main() {
 			panic(err)
 		}
 
-		var wg sync.WaitGroup
-		taskChannel := make(chan map[string]interface{})
-		resultChannel := make(chan map[string]interface{})
+		step2in := make(chan map[string]interface{})
+		step3in := make(chan map[string]interface{})
+		step3out := make(chan map[string]interface{})
 
-		go produce(sources, taskChannel)
+		go step1(sources, step2in)
 
-		for i := 0; i < Threads; i++ {
-			wg.Add(1)
+		var wgStep2 sync.WaitGroup
+		for i := 0; i < ConnectThreads; i++ {
+			wgStep2.Add(1)
 			go func() {
-				defer wg.Done()
-				consume(tr, taskChannel, resultChannel)
+				defer wgStep2.Done()
+				step2(step2in, step3in)
 			}()
 		}
-
 		go func() {
-			wg.Wait()
-			close(resultChannel)
+			wgStep2.Wait()
+			close(step3in)
+		}()
+
+		var wgStep3 sync.WaitGroup
+		for i := 0; i < VerifyThreads; i++ {
+			wgStep3.Add(1)
+			go func() {
+				defer wgStep3.Done()
+				step3(step3in, step3out)
+			}()
+		}
+		go func() {
+			wgStep3.Wait()
+			close(step3out)
 		}()
 
 		var outputs = []map[string]interface{}{}
-		for result := range resultChannel {
+		for result := range step3out {
 			outputs = append(outputs, result)
 			log.Println("verified", readString(result, "bookSourceName"), readString(result, "bookSourceUrl"))
 		}
@@ -111,12 +132,7 @@ func verify(u string) bool {
 	}
 	b, _ := json.Marshal(m)
 
-	c := &http.Client{
-		Timeout: VerifyTimeout,
-	}
-
-	res, err := c.Post(fmt.Sprintf("%s/reader3/searchBook?v=%d", Hectorqin, time.Now().UnixMilli()),
-		"application/json", bytes.NewReader(b))
+	res, err := httpPostJson(fmt.Sprintf("%s/reader3/searchBook?v=%d", Hectorqin, time.Now().UnixMilli()), string(b), VerifyTimeout)
 	if err != nil {
 		log.Println("verify", "post", err)
 		return false
@@ -137,7 +153,7 @@ func verify(u string) bool {
 	return result.IsSuccess
 }
 
-func produce(sources []map[string]interface{}, ch chan<- map[string]interface{}) {
+func step1(sources []map[string]interface{}, step2in chan<- map[string]interface{}) {
 
 	for i, source := range sources {
 		if i%100 == 0 {
@@ -161,7 +177,7 @@ func produce(sources []map[string]interface{}, ch chan<- map[string]interface{})
 			strings.Contains(bookSourceName, "FM") ||
 			strings.Contains(bookSourceName, "耽") ||
 			strings.Contains(bookSourceName, "同人") ||
-			strings.Contains(bookSourceName, "听书") ||
+			strings.Contains(bookSourceName, "听") ||
 			strings.Contains(bookSourceName, "草榴") ||
 			strings.Contains(bookSourceName, "图片") ||
 			strings.Contains(strings.ToUpper(bookSourceName), "R18") ||
@@ -169,18 +185,27 @@ func produce(sources []map[string]interface{}, ch chan<- map[string]interface{})
 			continue
 		}
 
-		ch <- source
+		step2in <- source
 
 	}
 
-	close(ch)
+	close(step2in)
 }
 
-func consume(tr http.RoundTripper, in <-chan map[string]interface{}, out chan<- map[string]interface{}) {
-	for task := range in {
+func step2(step2in <-chan map[string]interface{}, step3in chan<- map[string]interface{}) {
+	for task := range step2in {
 		bookSourceUrl := readString(task, "bookSourceUrl")
-		if is2xx(tr, bookSourceUrl) && verify(bookSourceUrl) {
-			out <- task
+		if is2xx(bookSourceUrl) {
+			step3in <- task
+		}
+	}
+}
+
+func step3(step3in <-chan map[string]interface{}, step3out chan<- map[string]interface{}) {
+	for task := range step3in {
+		bookSourceUrl := readString(task, "bookSourceUrl")
+		if verify(bookSourceUrl) {
+			step3out <- task
 		}
 	}
 }
@@ -197,10 +222,9 @@ func readString(source map[string]interface{}, key string) string {
 	return s
 }
 
-func httpGet(tr http.RoundTripper, u string) (*http.Response, error) {
+func httpGet(u string, timeout time.Duration) (*http.Response, error) {
 	c := &http.Client{
-		Transport: tr,
-		Timeout:   ConnectTimeout,
+		Timeout: timeout,
 	}
 
 	req, err := http.NewRequest(http.MethodGet, u, nil)
@@ -213,7 +237,23 @@ func httpGet(tr http.RoundTripper, u string) (*http.Response, error) {
 	return c.Do(req)
 }
 
-func is2xx(tr http.RoundTripper, u string) bool {
-	res, err := httpGet(tr, u)
+func is2xx(u string) bool {
+	res, err := httpGet(u, ConnectTimeout)
 	return err == nil && res.StatusCode >= 200 && res.StatusCode < 300
+}
+
+func httpPostJson(u string, body string, timeout time.Duration) (*http.Response, error) {
+	c := &http.Client{
+		Timeout: timeout,
+	}
+
+	req, err := http.NewRequest(http.MethodPost, u, strings.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.58")
+
+	return c.Do(req)
 }

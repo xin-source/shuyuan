@@ -1,0 +1,48 @@
+version: "3"
+
+services:
+
+  wgcf:
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1024M
+    hostname: wgcf
+    image: qmcgaw/gluetun
+    cap_add:
+      - NET_ADMIN
+    env_file:
+      - .env
+    environment:
+      TZ: 'Asia/Shanghai'
+      DOT: 'off'
+      VPN_SERVICE_PROVIDER: 'custom'
+      VPN_TYPE: 'wireguard'
+
+  hectorqin:
+    depends_on:
+      wgcf:
+         condition: service_healthy
+    network_mode: "service:wgcf"
+    image: hectorqin/reader
+    environment:
+      TZ: 'Asia/Shanghai'
+      SPRING_PROFILES_ACTIVE: 'prod'
+    healthcheck:
+        test: ["CMD", "nc", "-w", "1", "127.0.0.1", "8080"]
+        interval: 2s
+        timeout: 200s
+        retries: 100
+        start_period: 0s
+
+  app:
+    depends_on:
+      hectorqin:
+         condition: service_healthy
+    network_mode: "service:wgcf"
+    image: "golang:1"
+    working_dir: /source
+    volumes:
+      - ./:/source
+    command: sh -c "go run ."

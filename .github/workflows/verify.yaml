@@ -14,23 +14,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v4
-      - name: Hectorqin
-        run: |
-          # TODO hectorqin/reader use warp
-          docker run --rm -d --name reader -p 127.0.0.1:8080:8080 hectorqin/reader
-          until $(curl --output /dev/null --silent --head --fail http://127.0.0.1:8080); do
-              printf '.'
-              sleep 3s
-          done
-          # # 添加订阅
-          # curl -f -X POST 'http://127.0.0.1:8080/reader3/file/save' -H 'Content-type: application/json' -d '{"path":"remoteBookSourceSub.json","content":"[{\"name\":\"book\",\"link\":\"https://raw.githubusercontent.com/shidahuilang/shuyuan/shuyuan/book.json\",\"lastSyncTime\":null}]","home":"__HOME__"}' -i
-          # 同步，相当于导入
-          curl -X POST 'http://127.0.0.1:8080/reader3/saveFromRemoteSource' -H 'Content-type: application/json' -d '{"url":"https://raw.githubusercontent.com/shidahuilang/shuyuan/shuyuan/book.json"}' -i
       - name: wgcf register
         run: |
           mkdir -p /tmp/wgcf
-          cd /tmp/wgcf
+          pushd /tmp/wgcf
           docker run --rm -id --name wgcf -v /tmp/wgcf:/wgcf -w /wgcf -p 1080:1080 ubuntu:latest
           docker exec -i wgcf apt-get update
           docker exec -i wgcf apt-get install -y wget ca-certificates
@@ -38,15 +25,21 @@ jobs:
           docker exec -i wgcf chmod +x wgcf
           docker exec -i wgcf ./wgcf register --accept-tos
           docker exec -i wgcf ./wgcf generate
-          docker exec -i wgcf wget -O wireproxy_linux_amd64.tar.gz https://github.com/pufferffish/wireproxy/releases/download/v1.0.6/wireproxy_linux_amd64.tar.gz
-          docker exec -i wgcf tar xf wireproxy_linux_amd64.tar.gz
-          docker exec -i wgcf chmod +x wireproxy
-          docker exec -i wgcf bash -c 'echo "[Socks5]" >> wgcf-profile.conf'
-          docker exec -i wgcf bash -c 'echo "BindAddress = 0.0.0.0:1080" >> wgcf-profile.conf'
-          docker exec -i wgcf sed -E -i 's@^[^\n]+/128@@' wgcf-profile.conf
-          docker exec -i wgcf ./wireproxy -c wgcf-profile.conf -d
-      - name: Run a multi-line script
+          export WIREGUARD_PUBLIC_KEY="$(docker exec -i wgcf cat wgcf-profile.conf | sed -E 's/[ \t]//g' | grep -oP '(?<=PublicKey=)[^\n]+')"
+          [ -n "$WIREGUARD_PUBLIC_KEY" ]
+          export WIREGUARD_PRIVATE_KEY="$(docker exec -i wgcf cat wgcf-profile.conf | sed -E 's/[ \t]//g' | grep -oP '(?<=PrivateKey=)[^\n]+')"
+          [ -n "$WIREGUARD_PRIVATE_KEY" ]
+          docker kill wgcf
+          popd
+          cp .env.sample .env
+          sed -i "s@WIREGUARD_PUBLIC_KEY=@WIREGUARD_PUBLIC_KEY=$WIREGUARD_PUBLIC_KEY@" .env
+          sed -i "s@WIREGUARD_PRIVATE_KEY=@WIREGUARD_PRIVATE_KEY=$WIREGUARD_PRIVATE_KEY@" .env
+      - name: run
         run: |
+          docker compose up --abort-on-container-exit --exit-code-from app
+      - name: commit
+        run: |
+          sudo chown `id -u`:`id -g` good.json
           go run .
 
           git config user.name dependabot[bot]
