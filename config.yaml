@@ -1,5 +1,4 @@
 ---
-
 source_url: "https://raw.githubusercontent.com/shidahuilang/shuyuan/shuyuan/book.json"
 user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.58"
 connect_via_warp: true
@@ -11,5 +10,42 @@ verify_books:
   - name: "斗罗大陆"
     author: "唐家三少"
 verify_api: "http://127.0.0.1:8080"
-excludes: [ "禁", "漫", "成人", "腐", "甜", "🎧", "音乐", "广播", "FM", "耽", "同人", "听", "草榴", "图片", "🔞" ]
-excludes_insensitive_case: [ "r18", "bl" ]
+excludes:
+  [
+    "禁",
+    "漫",
+    "成人",
+    "腐",
+    "甜",
+    "🎧",
+    "音乐",
+    "广播",
+    "FM",
+    "耽",
+    "同人",
+    "听",
+    "草榴",
+    "图片",
+    "🔞",
+    "同性",
+    "女女",
+    "百合",
+    "女生",
+    "言情",
+    "腹黑",
+    "年下",
+    "男男",
+    "衍生",
+    "清水",
+    "强强",
+    "快穿",
+    "肉书",
+    "肉文",
+    "攻",
+    "受",
+    "高干",
+    "女性向",
+    "女频",
+    "海棠",
+  ]
+excludes_insensitive_case: ["r18", "bl", "abo", "p018"]

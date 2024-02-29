@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -77,21 +78,9 @@ func main() {
 	}
 
 	{
-		m := map[string]string{
-			"url": config.SourceURL,
-		}
-		b, _ := json.Marshal(m)
-		res, err := httpPostJson(fmt.Sprintf("%s/reader3/saveFromRemoteSource?v=%d", config.VerifyAPI, time.Now().UnixMilli()), string(b), time.Minute*10)
+		err := saveFromRemoteSource(5)
 		if err != nil {
 			panic(err)
-		}
-
-		defer res.Body.Close()
-		b, _ = io.ReadAll(res.Body)
-		if res.StatusCode < 200 || res.StatusCode >= 300 {
-			panic(string(b))
-		} else {
-			log.Println("saveFromRemoteSource", string(b))
 		}
 	}
 
@@ -161,6 +150,49 @@ func main() {
 	}
 }
 
+func saveFromRemoteSource(retry uint8) error {
+	i := uint8(0)
+
+	var err error
+
+	for i <= retry {
+		i++
+		m := map[string]string{
+			"url": config.SourceURL,
+		}
+		b, _ := json.Marshal(m)
+		var res *http.Response
+		res, err = httpPostJson(fmt.Sprintf("%s/reader3/saveFromRemoteSource?v=%d", config.VerifyAPI, time.Now().UnixMilli()), string(b), time.Minute*10)
+		if err != nil {
+			log.Println("saveFromRemoteSource", err)
+			continue
+		}
+
+		defer res.Body.Close()
+		b, _ = io.ReadAll(res.Body)
+		log.Println("saveFromRemoteSource", string(b))
+
+		var result struct {
+			IsSuccess bool `json:"isSuccess"`
+		}
+		err = json.Unmarshal(b, &result)
+		if err != nil {
+			log.Println("saveFromRemoteSource", err)
+			continue
+		}
+
+		if !result.IsSuccess {
+			err = errors.New(string(b))
+			log.Println("saveFromRemoteSource", err)
+			continue
+		}
+
+		return nil
+	}
+
+	return err
+}
+
 func step1(sources []map[string]interface{}, step2in chan<- map[string]interface{}) {
 
 	m := map[string]byte{}
@@ -181,6 +213,16 @@ func step1(sources []map[string]interface{}, step2in chan<- map[string]interface
 		bookSourceName := readString(source, "bookSourceName")
 
 		if shouldExclude(bookSourceName) {
+			continue
+		}
+
+		exploreUrl := readString(source, "exploreUrl")
+		if exploreUrl != "" && shouldExclude(exploreUrl) {
+			continue
+		}
+
+		bookSourceGroup := readString(source, "bookSourceGroup")
+		if bookSourceGroup != "" && shouldExclude(bookSourceGroup) {
 			continue
 		}
 
